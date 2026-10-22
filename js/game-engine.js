@@ -1,137 +1,28 @@
 import { getPairs, getWords, ALL_CATEGORIES } from './words.js';
 
-export const MIN_PLAYERS = 3;
-export const MAX_PLAYERS = 20;
-export const MIN_ROUNDS = 1;
-export const MAX_ROUNDS = 20;
-export function recommendedImposters(count) { return count <= 6 ? 1 : count <= 12 ? 2 : 3; }
-export function randomInt(max, cryptoObject = globalThis.crypto) {
-  if (!Number.isInteger(max) || max < 1) throw new RangeError('max must be a positive integer');
-  const limit = Math.floor(0x100000000 / max) * max;
-  const buf = new Uint32Array(1);
-  do { cryptoObject.getRandomValues(buf); } while (buf[0] >= limit);
-  return buf[0] % max;
-}
-export function secureShuffle(items, cryptoObject = globalThis.crypto) {
-  const result = [...items];
-  for (let i = result.length - 1; i > 0; i--) { const j = randomInt(i + 1, cryptoObject); [result[i], result[j]] = [result[j], result[i]]; }
-  return result;
-}
-export function validateSetup({ players, roundMode = 'elimination', roundLimit = 5 } = {}) {
-  const errors = [];
-  if (!Array.isArray(players) || players.length < MIN_PLAYERS || players.length > MAX_PLAYERS) errors.push(`Add between ${MIN_PLAYERS} and ${MAX_PLAYERS} players.`);
-  const clean = Array.isArray(players) ? players.map(n => String(n ?? '').trim()) : [];
-  if (clean.some(n => !n)) errors.push('Player names cannot be empty.');
-  if (new Set(clean.map(n => n.normalize('NFKC').toLocaleLowerCase())).size !== clean.length) errors.push('Each player needs a unique name.');
-  if (!['elimination', 'fixed'].includes(roundMode)) errors.push('Choose a valid round mode.');
-  if (roundMode === 'fixed' && (!Number.isInteger(Number(roundLimit)) || Number(roundLimit) < MIN_ROUNDS || Number(roundLimit) > MAX_ROUNDS)) errors.push(`Choose between ${MIN_ROUNDS} and ${MAX_ROUNDS} rounds.`);
-  return errors;
-}
-export function createGame(config, cryptoObject = globalThis.crypto) {
-  const names = config?.players;
-  const roundMode = config.roundMode ?? 'elimination';
-  const roundLimit = Number(config.roundLimit ?? 5);
-  const errors = validateSetup({ ...config, roundMode, roundLimit, players: names });
-  if (errors.length) throw new Error(errors.join(' '));
-  const players = names.map((name, index) => ({ id: `player-${index + 1}`, name: String(name).trim(), alive: true, role: 'civilian', word: null, wordMalayalam: null, imposterHint: null, hasVoted: false }));
-  const imposterCount = recommendedImposters(players.length);
-  if (imposterCount < 1 || imposterCount >= players.length) throw new Error('Could not create a valid role assignment.');
-  const mode = config.mode ?? (randomInt(2, cryptoObject) ? 'hidden' : 'different');
-  const validCategories = Array.isArray(config.categories) ? [...new Set(config.categories.filter(key => ALL_CATEGORIES.includes(key)))] : [];
-  const selected = validCategories.length ? validCategories : ALL_CATEGORIES;
-  const roles = secureShuffle([...Array(imposterCount).fill('imposter'), ...Array(players.length - imposterCount).fill('civilian')], cryptoObject);
-  players.forEach((player, index) => { player.role = roles[index]; });
-  let civilianWord, imposterWord = null, civilianWordEntry, imposterWordEntry = null, pairHint = null;
-  if (mode === 'different') {
-    const pairs = getPairs(selected, config.customWords ?? []);
-    if (!pairs.length) throw new Error('No valid word pairs are available for those categories.');
-    const pair = pairs[randomInt(pairs.length, cryptoObject)];
-    ({ civilian: civilianWord, imposter: imposterWord, civilianEntry: civilianWordEntry, imposterEntry: imposterWordEntry } = pair);
-    pairHint = pair.imposterHint?.differentWord ?? pair.civilianEntry.hiddenWordHint;
-  } else if (mode === 'hidden') {
-    const words = getWords(selected, config.customWords ?? []);
-    if (!words.length) throw new Error('No valid words are available for those categories.');
-    civilianWordEntry = words[randomInt(words.length, cryptoObject)];
-    civilianWord = civilianWordEntry.en;
-    pairHint = civilianWordEntry.hiddenWordHint;
-  } else throw new Error('Unknown game mode.');
-  for (const player of players) {
-    if (player.role === 'imposter') {
-      player.word = mode === 'different' ? imposterWord : null;
-      player.wordMalayalam = mode === 'different' ? imposterWordEntry?.ml ?? null : null;
-      player.imposterHint = config.imposterClue ? pairHint : null;
-    } else {
-      player.word = civilianWord;
-      player.wordMalayalam = civilianWordEntry?.ml ?? null;
-    }
-  }
-  return { phase: 'reveal', mode, imposterCount, civilianWord, imposterWord, civilianWordEntry, imposterWordEntry, players, revealOrder: secureShuffle(players.map(p => p.id), cryptoObject), revealIndex: 0, round: 1, roundMode, roundLimit: roundMode === 'fixed' ? roundLimit : null, completedRounds: 0, fixedRoundResult: null, votes: {}, revote: false, tiedIds: [], eliminatedId: null, lastEliminatedImposter: false, finalGuessUsed: false, finalGuessResult: null, clueIndex: 0, clueOrder: [], timer: { clueSeconds: config.clueSeconds ?? 30, discussionSeconds: config.discussionSeconds ?? 120 }, settings: { finalGuess: !!config.finalGuess, imposterClue: !!config.imposterClue }, categories: selected, winner: null, voteResults: null };
-}
-export function playerById(game, id) { return game.players.find(p => p.id === id); }
-export function livingPlayers(game) { return game.players.filter(p => p.alive); }
-export function currentRevealPlayer(game) { return playerById(game, game.revealOrder[game.revealIndex]); }
-export function advanceReveal(game) {
-  if (game.phase !== 'reveal') throw new Error('Not revealing roles.');
-  if (++game.revealIndex >= game.revealOrder.length) startClues(game);
-  return game;
-}
-export function startClues(game) { game.phase = 'clues'; game.clueOrder = secureShuffle(livingPlayers(game).map(p => p.id)); game.clueIndex = 0; game.votes = {}; game.voteResults = null; game.eliminatedId = null; game.lastEliminatedImposter = false; game.finalGuessResult = null; game.finalGuessUsed = false; }
-export function currentCluePlayer(game) { return playerById(game, game.clueOrder[game.clueIndex]); }
-export function nextClue(game) { if (game.phase !== 'clues') throw new Error('Not in clue round.'); if (game.clueIndex + 1 >= game.clueOrder.length) throw new Error('All living players have given a clue. Start voting.'); game.clueIndex++; }
-export function startVoting(game) { if (game.phase !== 'clues') throw new Error('Cannot start voting now.'); game.phase = 'voting'; game.votes = {}; game.voteResults = null; }
-export function eligibleVoters(game) { return livingPlayers(game).filter(p => !game.revote || game.tiedIds.includes(p.id)); }
-export function voteTargets(game) { return livingPlayers(game).filter(p => !game.revote || game.tiedIds.includes(p.id)); }
-export function castVote(game, voterId, targetId) {
-  if (game.phase !== 'voting') throw new Error('Voting is not open.');
-  const voter = playerById(game, voterId), target = playerById(game, targetId);
-  if (!voter?.alive || (game.revote && !game.tiedIds.includes(voterId))) throw new Error('This player cannot vote.');
-  if (game.votes[voterId]) throw new Error('This player has already voted.');
-  if (!target?.alive || (!game.revote && targetId === voterId) || (game.revote && !game.tiedIds.includes(targetId))) throw new Error('Invalid vote target.');
-  game.votes[voterId] = targetId; voter.hasVoted = true;
-}
-function completeVotingCycle(game) {
-  game.completedRounds++;
-  checkWinner(game);
-  if (game.winner) return;
-  if (game.roundMode === 'fixed' && game.completedRounds >= game.roundLimit) {
-    const alive = livingPlayers(game), imposters = alive.filter(p => p.role === 'imposter').length, civilians = alive.length - imposters;
-    game.fixedRoundResult = { roundsCompleted: game.completedRounds, civilians, imposters, winner: civilians === imposters ? 'draw' : civilians > imposters ? 'civilians' : 'imposters' };
-    game.phase = 'fixed-results';
-  }
-}
-export function endVoting(game) {
-  if (game.phase !== 'voting') throw new Error('Voting is not open.');
-  const pool = game.revote ? game.tiedIds : livingPlayers(game).map(p => p.id);
-  const counts = Object.fromEntries(pool.map(id => [id, 0]));
-  for (const [voter, target] of Object.entries(game.votes)) if (playerById(game, voter)?.alive && counts[target] !== undefined) counts[target]++;
-  game.voteResults = counts;
-  const max = Math.max(0, ...Object.values(counts));
-  const tied = pool.filter(id => counts[id] === max);
-  if (tied.length === 1 && max > 0) {
-    const eliminated = playerById(game, tied[0]); eliminated.alive = false; eliminated.hasVoted = false; game.eliminatedId = eliminated.id; game.lastEliminatedImposter = eliminated.role === 'imposter';
-    game.phase = 'results'; game.revote = false; game.tiedIds = [];
-    const winner = checkWinner(game);
-    if (winner === 'imposters' && game.settings.finalGuess && eliminated.role === 'imposter') game.winner = null;
-    if (!(winner === 'imposters' && game.settings.finalGuess && eliminated.role === 'imposter')) completeVotingCycle(game);
-  } else if (!game.revote && tied.length > 1) { game.revote = true; game.tiedIds = tied; game.votes = {}; game.voteResults = null; game.phase = 'revote'; }
-  else { game.eliminatedId = null; game.revote = false; game.tiedIds = []; game.phase = 'results'; completeVotingCycle(game); }
-  for (const p of game.players) p.hasVoted = false;
-  return game.voteResults;
-}
-export function startRevote(game) { if (game.phase !== 'revote') throw new Error('No revote is pending.'); game.phase = 'voting'; game.votes = {}; }
-export function checkWinner(game) {
-  const alive = livingPlayers(game), imposters = alive.filter(p => p.role === 'imposter').length, civilians = alive.length - imposters;
-  if (imposters === 0) game.winner = 'civilians'; else if (imposters >= civilians) game.winner = 'imposters'; else game.winner = null;
-  return game.winner;
-}
-export function submitFinalGuess(game, guess) {
-  if (!game.settings.finalGuess || !game.lastEliminatedImposter || game.finalGuessUsed || !game.eliminatedId) throw new Error('A final guess is not available.');
-  game.finalGuessUsed = true;
-  const correct = String(guess).trim().toLocaleLowerCase() === game.civilianWord.toLocaleLowerCase();
-  game.finalGuessResult = correct ? 'correct' : 'incorrect';
-  if (correct) game.winner = 'imposters'; else { checkWinner(game); if (!game.winner) completeVotingCycle(game); }
-  game.phase = 'results';
-  return correct;
-}
-export function skipFinalGuess(game) { if (!game.settings.finalGuess || !game.lastEliminatedImposter || game.finalGuessUsed) throw new Error('A final guess is not available.'); game.finalGuessUsed = true; game.finalGuessResult = 'skipped'; checkWinner(game); if (!game.winner) completeVotingCycle(game); }
-export function nextRound(game) { if (game.winner || game.fixedRoundResult || game.completedRounds <= 0 || game.phase !== 'results') throw new Error('The game cannot start another round.'); if (game.roundMode === 'fixed' && game.completedRounds >= game.roundLimit) throw new Error('The round limit has been reached.'); game.round = game.completedRounds + 1; startClues(game); }
+export const MIN_PLAYERS=3, MAX_PLAYERS=20, MIN_ROUNDS=1, MAX_ROUNDS=20;
+export function recommendedImposters(n){return n<=6?1:n<=12?2:3;}
+export function randomInt(max,cryptoObject=globalThis.crypto){if(!Number.isInteger(max)||max<1)throw new RangeError('max must be a positive integer');const lim=Math.floor(0x100000000/max)*max,b=new Uint32Array(1);do{cryptoObject.getRandomValues(b);}while(b[0]>=lim);return b[0]%max;}
+export function secureShuffle(items,cryptoObject=globalThis.crypto){const a=[...items];for(let i=a.length-1;i>0;i--){const j=randomInt(i+1,cryptoObject);[a[i],a[j]]=[a[j],a[i]];}return a;}
+export function validateSetup({players,roundMode='elimination',roundLimit=5,discussionSeconds=600}={}){const e=[];if(!Array.isArray(players)||players.length<3||players.length>20)e.push('Add between 3 and 20 players.');const n=Array.isArray(players)?players.map(x=>String(x??'').trim()):[];if(n.some(x=>!x))e.push('Player names cannot be empty.');if(new Set(n.map(x=>x.normalize('NFKC').toLocaleLowerCase())).size!==n.length)e.push('Each player needs a unique name.');if(!['elimination','fixed'].includes(roundMode))e.push('Choose a valid round mode.');if(roundMode==='fixed'&&(!Number.isInteger(Number(roundLimit))||Number(roundLimit)<1||Number(roundLimit)>20))e.push('Choose between 1 and 20 rounds.');const ds=Number(discussionSeconds);if(!Number.isInteger(ds)||ds<60||ds>3600)e.push('Choose a discussion timer between 1 and 60 minutes.');return e;}
+const clonePlayers=players=>players.map(p=>({...p,alive:true,hasVoted:false}));
+function assignRound(game,first=false){const previousWord=first?null:game.civilianWord,cryptoObject=game._crypto,players=clonePlayers(game.originalPlayers);const imposterCount=recommendedImposters(players.length),roles=secureShuffle([...Array(imposterCount).fill('imposter'),...Array(players.length-imposterCount).fill('civilian')],cryptoObject);players.forEach((p,i)=>p.role=roles[i]);const mode=game.roundMode==='fixed'?(randomInt(2,cryptoObject)?'hidden':'different'):(game._configuredMode??(randomInt(2,cryptoObject)?'hidden':'different'));const cats=game.categories;let civilianWord,imposterWord=null,civilianWordEntry,imposterWordEntry=null,pairHint=null;if(mode==='different'){let pairs=getPairs(cats,game._customWords);if(!pairs.length)throw Error('No valid word pairs are available for those categories.');if(previousWord&&pairs.length>1)pairs=pairs.filter(p=>p.civilian!==previousWord);const pair=pairs[randomInt(pairs.length,cryptoObject)];({civilian:civilianWord,imposter:imposterWord,civilianEntry:civilianWordEntry,imposterEntry:imposterWordEntry}=pair);pairHint=pair.imposterHint?.differentWord??pair.civilianEntry.hiddenWordHint;}else if(mode==='hidden'){let words=getWords(cats,game._customWords);if(!words.length)throw Error('No valid words are available for those categories.');if(previousWord&&words.length>1)words=words.filter(w=>w.en!==previousWord);civilianWordEntry=words[randomInt(words.length,cryptoObject)];civilianWord=civilianWordEntry.en;pairHint=civilianWordEntry.hiddenWordHint;}else throw Error('Unknown game mode.');for(const p of players){if(p.role==='imposter'){p.word=mode==='different'?imposterWord:null;p.wordMalayalam=mode==='different'?imposterWordEntry?.ml??null:null;p.imposterHint=game.settings.imposterClue?pairHint:null;}else{p.word=civilianWord;p.wordMalayalam=civilianWordEntry?.ml??null;p.imposterHint=null;}}
+ game.players=players;game.currentRoundPlayers=players;game.mode=mode;game.imposterCount=game.initialImposterCount=imposterCount;game.civilianWord=civilianWord;game.imposterWord=imposterWord;game.civilianWordEntry=civilianWordEntry;game.imposterWordEntry=imposterWordEntry;game.revealOrder=secureShuffle(players.map(p=>p.id),cryptoObject);game.revealIndex=0;game.phase='reveal';game.votes={};game.ballotsByPlayer=game.votes;game.voteResults=null;game.eliminatedId=null;game.roundEliminatedPlayerIds=[];game.revote=false;game.tiedIds=[];game.clueIndex=0;game.clueOrder=[];game.winner=null;game.roundWinner=null;game.discussionTimeExpired=false;game.discussionDeadline=null;game._resultProcessed=false;game.lastEliminatedImposter=false;game.finalGuessUsed=false;game.finalGuessResult=null;}
+export function createGame(config={},cryptoObject=globalThis.crypto){const names=config.players,roundMode=config.roundMode??'elimination',roundLimit=Number(config.roundLimit??5),discussionSeconds=Number(config.discussionSeconds??600),errors=validateSetup({...config,players:names,roundMode,roundLimit,discussionSeconds});if(errors.length)throw Error(errors.join(' '));const base=names.map((name,i)=>({id:`player-${i+1}`,name:String(name).trim(),alive:true,role:'civilian',word:null,wordMalayalam:null,imposterHint:null,hasVoted:false}));const cats=Array.isArray(config.categories)?[...new Set(config.categories.filter(k=>ALL_CATEGORIES.includes(k)))]:[];const game={phase:'reveal',players:base,originalPlayers:base.map(p=>({...p})),currentRoundPlayers:[],roundMode,roundLimit:roundMode==='fixed'?roundLimit:null,configuredRoundLimit:roundMode==='fixed'?roundLimit:null,round:1,currentRoundNumber:1,completedRounds:0,roundResults:[],overallWinner:null,roundWinner:null,votes:{},ballotsByPlayer:{},roundEliminatedPlayerIds:[],discussionDurationSeconds:discussionSeconds,discussionDeadline:null,discussionTimeExpired:false,timer:{clueSeconds:config.clueSeconds??30,discussionSeconds},settings:{finalGuess:!!config.finalGuess,imposterClue:!!config.imposterClue},categories:cats.length?cats:ALL_CATEGORIES, winner:null,_crypto:cryptoObject,_configuredMode:config.mode,_customWords:config.customWords??[]};assignRound(game,true);return game;}
+export function playerById(g,id){return g.players.find(p=>p.id===id);}export function livingPlayers(g){return g.players.filter(p=>p.alive);}export function currentRevealPlayer(g){return playerById(g,g.revealOrder[g.revealIndex]);}
+export function advanceReveal(g){if(g.phase!=='reveal')throw Error('Not revealing roles.');if(++g.revealIndex>=g.revealOrder.length)startClues(g);return g;}
+export function startClues(g){g.phase='clues';g.clueOrder=secureShuffle(livingPlayers(g).map(p=>p.id),g._crypto);g.clueIndex=0;g.votes={};g.ballotsByPlayer=g.votes;g.voteResults=null;g.eliminatedId=null;g.lastEliminatedImposter=false;g.finalGuessResult=null;g.finalGuessUsed=false;}
+export function currentCluePlayer(g){return playerById(g,g.clueOrder[g.clueIndex]);}export function nextClue(g){if(g.phase!=='clues')throw Error('Not in clue round.');if(g.clueIndex+1>=g.clueOrder.length)throw Error('All living players have given a clue. Start voting.');g.clueIndex++;}
+export function startVoting(g){if(g.phase!=='clues')throw Error('Cannot start voting now.');g.phase='voting';g.discussionDeadline=null;g.votes={};g.ballotsByPlayer=g.votes;g.voteResults=null;}
+export function eligibleVoters(g){return livingPlayers(g);}export function voteTargets(g){return livingPlayers(g).filter(p=>!g.revote||g.tiedIds.includes(p.id));}
+export function requiredVoteCount(g,voterId){const available=voteTargets(g).filter(p=>p.id!==voterId).length;return Math.min(g.initialImposterCount,available);}
+export function castVote(g,voterId,targetIds){if(g.phase!=='voting')throw Error('Voting is not open.');const voter=playerById(g,voterId);if(!voter?.alive)throw Error('This player cannot vote.');if(g.votes[voterId])throw Error('This player has already voted.');const ids=Array.isArray(targetIds)?targetIds:[targetIds];if(!ids.length||ids.some(x=>typeof x!=='string')||new Set(ids).size!==ids.length)throw Error('Choose distinct players for your ballot.');const required=requiredVoteCount(g,voterId);if(ids.length!==required)throw Error(`Select ${required} distinct ${required===1?'suspect':'suspects'} to submit your ballot.`);for(const id of ids){const target=playerById(g,id);if(!target?.alive||id===voterId||(g.revote&&!g.tiedIds.includes(id)))throw Error('Invalid vote target.');}g.votes[voterId]=ids;voter.hasVoted=true;}
+function recordFixedResult(g,counts,eliminatedIds){if(g._resultProcessed)return;g._resultProcessed=true;g.roundEliminatedPlayerIds=eliminatedIds;const imp=eliminatedIds.filter(id=>playerById(g,id)?.role==='imposter').length;const remainingImposters=g.initialImposterCount-imp,civilians=g.originalPlayers.length-g.initialImposterCount-(eliminatedIds.length-imp);const winner=remainingImposters===0?'civilians':remainingImposters>=civilians?'imposters':(eliminatedIds.length? 'draw':'draw');g.roundWinner=g.winner=winner;g.completedRounds++;g.roundResults.push({round:g.round,mode:g.mode,civilianWord:g.civilianWord,imposterWord:g.imposterWord,players:g.players.map(p=>({id:p.id,name:p.name,role:p.role,word:p.word,wordMalayalam:p.wordMalayalam,imposterHint:p.imposterHint})),voteResults:{...counts},eliminatedIds:[...eliminatedIds],winner});g.phase=g.completedRounds>=g.configuredRoundLimit?'fixed-results':'results';if(g.phase==='fixed-results'){const cw=g.roundResults.filter(r=>r.winner==='civilians').length,iw=g.roundResults.filter(r=>r.winner==='imposters').length;g.overallWinner=cw===iw?'draw':cw>iw?'civilians':'imposters';}}
+export function endVoting(g){if(g.phase!=='voting')throw Error('Voting is not open.');if(Object.keys(g.votes).length!==eligibleVoters(g).length)throw Error('Every eligible player must submit a ballot before votes are revealed.');const pool=(g.revote?g.tiedIds:livingPlayers(g).map(p=>p.id));const counts=Object.fromEntries(pool.map(id=>[id,0]));for(const ballot of Object.values(g.votes))for(const target of ballot)if(counts[target]!==undefined)counts[target]++;g.voteResults=counts;const max=Math.max(0,...Object.values(counts)),tied=pool.filter(id=>counts[id]===max);if(tied.length===1&&max>0){const p=playerById(g,tied[0]);p.alive=false;g.eliminatedId=p.id;g.lastEliminatedImposter=p.role==='imposter';g.roundEliminatedPlayerIds=[p.id];g.revote=false;g.tiedIds=[];g.phase='results';if(g.roundMode==='fixed')recordFixedResult(g,counts,[p.id]);else{checkWinner(g);if(!(g.winner==='imposters'&&g.settings.finalGuess&&p.role==='imposter'))g.completedRounds++;}}else if(!g.revote&&tied.length>1){g.revote=true;g.tiedIds=tied;g.votes={};g.ballotsByPlayer=g.votes;g.voteResults=null;g.phase='revote';}else{g.eliminatedId=null;g.revote=false;g.tiedIds=[];g.roundEliminatedPlayerIds=[];g.phase='results';if(g.roundMode==='fixed')recordFixedResult(g,counts,[]);else g.completedRounds++;}for(const p of g.players)p.hasVoted=false;return g.voteResults;}
+export function startRevote(g){if(g.phase!=='revote')throw Error('No revote is pending.');g.phase='voting';g.votes={};g.ballotsByPlayer=g.votes;}
+export function checkWinner(g){if(g.roundMode==='fixed')return null;const a=livingPlayers(g),i=a.filter(p=>p.role==='imposter').length,c=a.length-i;g.winner=i===0?'civilians':i>=c?'imposters':null;return g.winner;}
+export function submitFinalGuess(g,guess){if(!g.settings.finalGuess||!g.lastEliminatedImposter||g.finalGuessUsed||!g.eliminatedId)throw Error('A final guess is not available.');g.finalGuessUsed=true;const ok=String(guess).trim().toLocaleLowerCase()===g.civilianWord.toLocaleLowerCase();g.finalGuessResult=ok?'correct':'incorrect';if(ok)g.winner='imposters';else checkWinner(g);g.phase='results';return ok;}
+export function skipFinalGuess(g){if(!g.settings.finalGuess||!g.lastEliminatedImposter||g.finalGuessUsed)throw Error('A final guess is not available.');g.finalGuessUsed=true;g.finalGuessResult='skipped';checkWinner(g);}
+export function startDiscussion(g,now=Date.now()){if(g.roundMode!=='fixed'||g.phase!=='clues')throw Error('Discussion is not available.');g.discussionDeadline=now+g.discussionDurationSeconds*1000;g.discussionTimeExpired=false;}
+export function expireDiscussion(g,now=Date.now()){if(!g.discussionDeadline||now<g.discussionDeadline||g.discussionTimeExpired)return false;g.discussionTimeExpired=true;return true;}
+export function nextRound(g){if(g.phase!=='results'||g.completedRounds<=0)throw Error('The game cannot start another round.');if(g.roundMode==='fixed'){if(g.completedRounds>=g.configuredRoundLimit)throw Error('The round limit has been reached.');g.round=g.currentRoundNumber=g.completedRounds+1;assignRound(g);return g;}if(g.winner)throw Error('The game is complete.');g.round=g.completedRounds+1;startClues(g);return g;}
