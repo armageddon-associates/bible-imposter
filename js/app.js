@@ -9,7 +9,7 @@ const toast = document.querySelector('#toast');
 let prefs = loadPreferences();
 let game = null;
 let screen = 'home';
-let setupState = { players: ['Player 1','Player 2','Player 3'], categories: prefs.categories.length ? prefs.categories : [...ALL_CATEGORIES], clueSeconds: prefs.clueSeconds, discussionSeconds: prefs.discussionSeconds, finalGuess: false };
+let setupState = { players: ['Player 1','Player 2','Player 3'], categories: prefs.categories.length ? prefs.categories : [...ALL_CATEGORIES], clueSeconds: prefs.clueSeconds, roundMode: 'elimination', roundLimit: 5, imposterClue: false, finalGuess: false };
 let revealed = false, voterIndex = 0, pendingVote = null, timerValue = null, timer = createTimer(value => { timerValue = value; render(); }, () => handleTimerEnd()), timerStarted = false, timeoutNotice = '';
 let votePrivate = false;
 
@@ -19,25 +19,25 @@ function collectSetup() {
   setupState.players = [...document.querySelectorAll('.player-name')].map(input=>input.value.trim());
   setupState.categories = [...document.querySelectorAll('.category-chip.selected')].map(btn=>btn.dataset.category);
   setupState.clueSeconds = Number(document.querySelector('#clue-seconds')?.value ?? setupState.clueSeconds);
-  setupState.discussionSeconds = Number(document.querySelector('#discussion-seconds')?.value ?? setupState.discussionSeconds);
+  setupState.roundMode = document.querySelector('#round-mode')?.value ?? setupState.roundMode;
+  setupState.roundLimit = Number(document.querySelector('#round-limit')?.value ?? setupState.roundLimit);
+  setupState.imposterClue = !!document.querySelector('#imposter-clue')?.checked;
   setupState.finalGuess = !!document.querySelector('#final-guess')?.checked;
 }
 function render() {
-  const views = { home: ui.home, setup: ()=>ui.setup(setupState), reveal: ()=>ui.reveal(game,revealed), clues: ()=>ui.clue(game,timerValue), discussion: ()=>ui.discussion(game,timerValue,timer.paused), voting: ()=>ui.voting(game,voterIndex,pendingVote,votePrivate), results: ()=>ui.results(game), howto: ui.howto, settings: ()=>ui.settings(prefs) };
+  const views = { home: ui.home, setup: ()=>ui.setup(setupState), reveal: ()=>ui.reveal(game,revealed), clues: ()=>ui.clue(game,timerValue), voting: ()=>ui.voting(game,voterIndex,pendingVote,votePrivate), results: ()=>ui.results(game), howto: ui.howto, settings: ()=>ui.settings(prefs) };
   app.innerHTML = views[screen]?.() ?? ui.home();
   if (prefs.reducedMotion) document.documentElement.classList.add('reduced-motion'); else document.documentElement.classList.remove('reduced-motion');
   if (screen==='clues' && game?.timer.clueSeconds>0 && !timerStarted) { timerStarted=true; timer.start(game.timer.clueSeconds); }
-  if (screen==='discussion' && game?.timer.discussionSeconds>0 && !timerStarted) { timerStarted=true; timer.start(game.timer.discussionSeconds); }
   if (screen==='setup') { const count=document.querySelector('#player-count'); if(count) count.textContent=setupState.players.length; }
 }
 function handleTimerEnd() {
   timerStarted=false;
-  if(screen==='clues') { timeoutNotice='Clue time is up.'; showToast(timeoutNotice); }
-  if(screen==='discussion') { timeoutNotice='Discussion time is up. Ready to vote?'; showToast(timeoutNotice); }
+  if(screen==='clues') { beginVoting(); return; }
   render();
 }
 function goResults() { timer.stop(); timerStarted=false; timerValue=null; screen='results'; render(); }
-function beginVoting(revote = false) { if (revote) engine.startRevote(game); else engine.startVoting(game); voterIndex=0; pendingVote=null; votePrivate=false; setScreen('voting'); }
+function beginVoting(revote = false) { if (!game || screen!=='clues' && !revote || game.phase!=='clues' && !revote) return; if (revote) engine.startRevote(game); else engine.startVoting(game); voterIndex=0; pendingVote=null; votePrivate=false; setScreen('voting'); }
 function finishVoting() {
   try {
     timer.stop();
@@ -53,7 +53,7 @@ function confirmVote(target) {
 }
 function startNewGame() {
   collectSetup();
-  const errors=engine.validateSetup({players:setupState.players,categories:setupState.categories});
+  const errors=engine.validateSetup({players:setupState.players,categories:setupState.categories,roundMode:setupState.roundMode,roundLimit:setupState.roundLimit});
   const error=document.querySelector('#setup-error');
   if(errors.length) { error.textContent=errors.join(' '); error.classList.add('visible'); return; }
   try {
@@ -62,8 +62,8 @@ function startNewGame() {
 }
 function replay() { timer.stop(); game=null; setupState.players=setupState.players.map((p,i)=>p || `Player ${i+1}`); setScreen('setup'); }
 function updatePreference() {
-  const sound=document.querySelector('#pref-sound'), motion=document.querySelector('#pref-motion'), clue=document.querySelector('#pref-clue'), discussion=document.querySelector('#pref-discussion');
-  if(sound) prefs.sound=sound.checked; if(motion) prefs.reducedMotion=motion.checked; if(clue) prefs.clueSeconds=Number(clue.value); if(discussion) prefs.discussionSeconds=Number(discussion.value);
+  const sound=document.querySelector('#pref-sound'), motion=document.querySelector('#pref-motion'), clue=document.querySelector('#pref-clue');
+  if(sound) prefs.sound=sound.checked; if(motion) prefs.reducedMotion=motion.checked; if(clue) prefs.clueSeconds=Number(clue.value);
   savePreferences(prefs); if(screen==='settings') render();
 }
 
@@ -72,7 +72,7 @@ app.addEventListener('click', event => {
   const action=button.dataset.action;
   if(screen==='setup' && ['add-player','remove-player','category','toggle-all-categories'].includes(action)) collectSetup();
   switch(action) {
-    case 'setup': setupState.players=['Player 1','Player 2','Player 3']; setupState.categories=prefs.categories.length?prefs.categories:[...ALL_CATEGORIES]; setupState.clueSeconds=prefs.clueSeconds; setupState.discussionSeconds=prefs.discussionSeconds; setupState.finalGuess=false; setScreen('setup'); break;
+    case 'setup': setupState.players=['Player 1','Player 2','Player 3']; setupState.categories=prefs.categories.length?prefs.categories:[...ALL_CATEGORIES]; setupState.clueSeconds=prefs.clueSeconds; setupState.roundMode='elimination'; setupState.roundLimit=5; setupState.imposterClue=false; setupState.finalGuess=false; setScreen('setup'); break;
     case 'home': game=null; setScreen('home'); break;
     case 'howto': setScreen('howto'); break;
     case 'settings': setScreen('settings'); break;
@@ -83,11 +83,7 @@ app.addEventListener('click', event => {
     case 'start-game': startNewGame(); break;
     case 'show-private': revealed=true; render(); break;
     case 'next-reveal': revealed=false; engine.advanceReveal(game); if(game.phase==='clues') setScreen('clues'); else render(); break;
-    case 'next-clue': timer.stop(); timerStarted=false; timerValue=null; engine.nextClue(game); if(game.phase==='discussion') render(); else render(); break;
-    case 'start-discussion': timer.stop(); timerStarted=false; game.phase='discussion'; timerValue=null; render(); break;
-    case 'pause-timer': timer.pause(); render(); break;
-    case 'resume-timer': timer.resume(); render(); break;
-    case 'early-vote': beginVoting(); break;
+    case 'next-clue': timer.stop(); timerStarted=false; timerValue=null; engine.nextClue(game); render(); break;
     case 'start-voting': beginVoting(); break;
     case 'start-revote': beginVoting(true); break;
     case 'show-ballot': votePrivate=true; render(); break;
@@ -96,9 +92,9 @@ app.addEventListener('click', event => {
     case 'confirm-vote': confirmVote(button.dataset.target); votePrivate=false; break;
     case 'next-voter': voterIndex++; votePrivate=false; if(voterIndex>=engine.eligibleVoters(game).length) finishVoting(); else render(); break;
     case 'end-voting': finishVoting(); break;
-    case 'next-round': engine.nextRound(game); voterIndex=0; setScreen('clues'); break;
+    case 'next-round': try { engine.nextRound(game); voterIndex=0; setScreen('clues'); } catch(e) { showToast(e.message); } break;
     case 'play-again': replay(); break;
-    case 'skip-guess': game.finalGuessUsed=true; game.finalGuessResult='skipped'; engine.checkWinner(game); goResults(); break;
+    case 'skip-guess': try { engine.skipFinalGuess(game); goResults(); } catch(e) { showToast(e.message); } break;
     case 'clear-preferences': clearPreferences(); prefs=loadPreferences(); showToast('Saved preferences cleared.'); render(); break;
   }
 });
@@ -106,21 +102,24 @@ app.addEventListener('submit', event=>{
   if(event.target.id==='guess-form') { event.preventDefault(); const value=document.querySelector('#final-word-guess').value; try { engine.submitFinalGuess(game,value); goResults(); } catch(e) { showToast(e.message); } }
 });
 app.addEventListener('change', event=>{
-  if(event.target.closest('#pref-sound')||event.target.closest('#pref-motion')||event.target.closest('#pref-clue')||event.target.closest('#pref-discussion')) updatePreference();
+  if(event.target.closest('#pref-sound')||event.target.closest('#pref-motion')||event.target.closest('#pref-clue')) updatePreference();
   if(event.target.id==='clue-seconds') setupState.clueSeconds=Number(event.target.value);
-  if(event.target.id==='discussion-seconds') setupState.discussionSeconds=Number(event.target.value);
   if(event.target.id==='final-guess') setupState.finalGuess=event.target.checked;
+  if(event.target.id==='imposter-clue') setupState.imposterClue=event.target.checked;
+  if(event.target.id==='round-mode') { setupState.roundMode=event.target.value; const setting=document.querySelector('#round-limit-setting'); if(setting) setting.hidden=setupState.roundMode!=='fixed'; updateSetupValidation(); }
+  if(event.target.id==='round-limit') { setupState.roundLimit=Number(event.target.value); updateSetupValidation(); }
 });
 app.addEventListener('input', event=>{
   if(event.target.matches('.player-name')) {
     const rows=[...document.querySelectorAll('.player-name')];
     const duplicates=rows.filter(input=>input.value.trim()&&rows.filter(other=>other.value.trim().normalize('NFKC').toLocaleLowerCase()===input.value.trim().normalize('NFKC').toLocaleLowerCase()).length>1);
     rows.forEach(input=>input.classList.toggle('invalid',duplicates.includes(input)));
-    const errors=engine.validateSetup({players:rows.map(input=>input.value)});
+    const errors=engine.validateSetup({players:rows.map(input=>input.value),roundMode:setupState.roundMode,roundLimit:Number(document.querySelector('#round-limit')?.value ?? setupState.roundLimit)});
     const start=document.querySelector('[data-action="start-game"]'), error=document.querySelector('#setup-error');
     if(start) start.disabled=errors.length>0;
     if(error) { error.textContent=errors.join(' '); error.classList.toggle('visible',errors.length>0); }
   }
 });
+function updateSetupValidation() { const errors=engine.validateSetup({players:[...document.querySelectorAll('.player-name')].map(input=>input.value),roundMode:setupState.roundMode,roundLimit:Number(document.querySelector('#round-limit')?.value ?? setupState.roundLimit)}); const start=document.querySelector('[data-action="start-game"]'),error=document.querySelector('#setup-error'); if(start) start.disabled=errors.length>0; if(error) { error.textContent=errors.join(' '); error.classList.toggle('visible',errors.length>0); } }
 window.addEventListener('keydown', e=>{ if(e.key==='Escape'&&screen==='reveal'&&revealed){revealed=false;render();} });
 render();

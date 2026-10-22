@@ -90,7 +90,7 @@ test('supports a one-time final Imposter guess', () => {
 test('word pools are nonempty and reject empty, equal, and duplicate custom entries', () => {
   const pairs=getPairs(ALL_CATEGORIES,[' Ark ','ark','','Rainbow']);
   assert.ok(pairs.length>0); assert.ok(pairs.every(p=>p.civilian.toLowerCase()!==p.imposter.toLowerCase()));
-  assert.ok(getWords(['concepts'],['Faith',' faith ','Hope']).includes('Faith'));
+  assert.ok(getWords(['concepts'],['Faith',' faith ','Hope']).some(word=>word.en.toLocaleLowerCase()==='faith'));
   assert.ok(getPairs([],[]).length>0);
 });
 test('empty or stale categories fall back to local Bible words; invalid mode still fails clearly', () => {
@@ -120,9 +120,56 @@ test('setup UI needs only player names and disables Start Game for invalid lists
   const base={players:names(7),categories:ALL_CATEGORIES,clueSeconds:30,discussionSeconds:120,finalGuess:false};
   const valid=ui.setup(base);
   assert.match(valid,/7 players · 2 Imposters · 5 Civilians/);
-  assert.match(valid,/Ready to play! The game will automatically choose the Bible word, game mode, and Imposters/);
+  assert.match(valid,/Ready to play! The game automatically chooses the Bible word, game mode, and Imposters/);
   assert.doesNotMatch(valid,/imposter-plus|imposter-minus|custom-words|Custom Bible words/);
   assert.match(ui.setup({...base,players:['Alex','Alex','Jordan']}).match(/<button class="button primary" data-action="start-game"[^>]*>/)?.[0]??'',/disabled/);
   assert.doesNotMatch(ui.setup({...base,players:['Alex','Casey','Jordan']}),/data-action="start-game" disabled/);
   assert.match(ui.setup({...base,categories:['removed-category']}),/Using the complete Bible word bank/);
+});
+
+test('validates round modes and fixed limits', () => {
+  assert.equal(game.validateSetup({players:names(3),roundMode:'elimination'}).length,0);
+  for (const limit of [1,5,20]) assert.equal(game.validateSetup({players:names(3),roundMode:'fixed',roundLimit:limit}).length,0);
+  for (const limit of [0,21,2.5,NaN]) assert.ok(game.validateSetup({players:names(3),roundMode:'fixed',roundLimit:limit}).length);
+});
+test('stores private translations and optional clues without leaking into the wrong role', () => {
+  const different=make({mode:'different',categories:['characters'],imposterClue:true});
+  assert.ok(different.players.filter(p=>p.role==='civilian').every(p=>p.wordMalayalam===different.civilianWordEntry.ml));
+  assert.ok(different.players.filter(p=>p.role==='imposter').every(p=>p.word===different.imposterWord&&p.imposterHint));
+  assert.ok(different.players.filter(p=>p.role==='civilian').every(p=>p.imposterHint===null));
+  const hidden=make({mode:'hidden',imposterClue:true});
+  assert.ok(hidden.players.filter(p=>p.role==='imposter').every(p=>p.word===null&&p.wordMalayalam===null&&p.imposterHint));
+  assert.ok(hidden.players.filter(p=>p.role==='civilian').every(p=>p.word===hidden.civilianWord&&p.wordMalayalam===hidden.civilianWordEntry.ml));
+  const noHint=make({mode:'hidden'}); assert.ok(noHint.players.every(p=>p.role!=='imposter'||p.imposterHint===null));
+});
+test('clue phase goes straight to voting and guards repeated transitions', () => {
+  const g=make(); game.startClues(g); game.startVoting(g);
+  assert.equal(g.phase,'voting'); assert.throws(()=>game.startVoting(g));
+  assert.throws(()=>game.nextClue(g));
+});
+test('fixed rounds count a completed revote cycle, retain eliminations, and score remaining teams', () => {
+  const g=make({players:names(4),roundMode:'fixed',roundLimit:2}); game.startClues(g); game.startVoting(g);
+  const [a,b,c,d]=g.players;
+  game.castVote(g,a.id,b.id); game.castVote(g,b.id,a.id); game.castVote(g,c.id,a.id); game.castVote(g,d.id,b.id); game.endVoting(g); game.startRevote(g);
+  game.castVote(g,a.id,b.id); game.castVote(g,b.id,a.id); game.endVoting(g);
+  assert.equal(g.completedRounds,1); game.nextRound(g); assert.equal(g.round,2); assert.equal(g.clueOrder.length,4);
+  game.startVoting(g); const target=g.players.find(p=>p.role==='civilian'); for(const voter of game.eligibleVoters(g)) if(voter.id!==target.id) game.castVote(g,voter.id,target.id); game.castVote(g,target.id,g.players.find(p=>p.id!==target.id).id); game.endVoting(g);
+  assert.equal(g.completedRounds,2); assert.ok(g.fixedRoundResult); assert.equal(g.phase,'fixed-results'); assert.equal(target.alive,false); assert.throws(()=>game.nextRound(g));
+});
+test('fixed mode ends on an earlier standard win and limits may be one round', () => {
+  const g=make({players:names(3),roundMode:'fixed',roundLimit:1}); game.startClues(g); game.startVoting(g);
+  const imp=g.players.find(p=>p.role==='imposter'); for(const voter of game.eligibleVoters(g)) if(voter.id!==imp.id) game.castVote(g,voter.id,imp.id);
+  game.endVoting(g); assert.equal(g.winner,'civilians'); assert.equal(g.fixedRoundResult,null);
+});
+test('private reveal renders Malayalam for owned words and imposter hints only for imposters', () => {
+  const g=make({categories:['characters'],imposterClue:true});
+  const civilian=g.players.find(p=>p.role==='civilian'), imposter=g.players.find(p=>p.role==='imposter');
+  g.revealOrder=[civilian.id]; let html=ui.reveal(g,true); if(civilian.wordMalayalam) assert.match(html,new RegExp(civilian.wordMalayalam));
+  g.revealOrder=[imposter.id]; html=ui.reveal(g,true); assert.match(html,new RegExp(imposter.imposterHint));
+});
+test('setup exposes both round modes and fixed results are clearly labeled and complete', () => {
+  const setup=ui.setup({players:names(3),categories:ALL_CATEGORIES,clueSeconds:30,roundMode:'elimination',roundLimit:5,imposterClue:false,finalGuess:false});
+  assert.match(setup,/Elimination Every Round/); assert.match(setup,/Fixed Number of Rounds/); assert.match(setup,/id="round-limit" type="number" min="1" max="20" step="1" value="5"/);
+  const g=make({players:names(4),roundMode:'fixed',roundLimit:2}); g.fixedRoundResult={roundsCompleted:2,civilians:2,imposters:1,winner:'civilians'};
+  const html=ui.results(g); assert.match(html,/FIXED-ROUND RESULT/); assert.match(html,/Remaining players/); assert.match(html,/ORIGINAL CIVILIAN WORD/); assert.doesNotMatch(html,/data-action="next-round"/);
 });
