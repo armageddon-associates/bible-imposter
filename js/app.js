@@ -9,7 +9,7 @@ const toast = document.querySelector('#toast');
 let prefs = loadPreferences();
 let game = null;
 let screen = 'home';
-let setupState = { players: ['Player 1','Player 2','Player 3'], imposters: 1, categories: prefs.categories.length ? prefs.categories : [...ALL_CATEGORIES], customWords: [], clueSeconds: prefs.clueSeconds, discussionSeconds: prefs.discussionSeconds, finalGuess: false };
+let setupState = { players: ['Player 1','Player 2','Player 3'], categories: prefs.categories.length ? prefs.categories : [...ALL_CATEGORIES], clueSeconds: prefs.clueSeconds, discussionSeconds: prefs.discussionSeconds, finalGuess: false };
 let revealed = false, voterIndex = 0, pendingVote = null, timerValue = null, timer = createTimer(value => { timerValue = value; render(); }, () => handleTimerEnd()), timerStarted = false, timeoutNotice = '';
 let votePrivate = false;
 
@@ -18,7 +18,6 @@ function showToast(message) { toast.textContent = message; toast.classList.add('
 function collectSetup() {
   setupState.players = [...document.querySelectorAll('.player-name')].map(input=>input.value.trim());
   setupState.categories = [...document.querySelectorAll('.category-chip.selected')].map(btn=>btn.dataset.category);
-  setupState.customWords = (document.querySelector('#custom-words')?.value ?? '').split(',').map(w=>w.trim()).filter(Boolean);
   setupState.clueSeconds = Number(document.querySelector('#clue-seconds')?.value ?? setupState.clueSeconds);
   setupState.discussionSeconds = Number(document.querySelector('#discussion-seconds')?.value ?? setupState.discussionSeconds);
   setupState.finalGuess = !!document.querySelector('#final-guess')?.checked;
@@ -29,7 +28,7 @@ function render() {
   if (prefs.reducedMotion) document.documentElement.classList.add('reduced-motion'); else document.documentElement.classList.remove('reduced-motion');
   if (screen==='clues' && game?.timer.clueSeconds>0 && !timerStarted) { timerStarted=true; timer.start(game.timer.clueSeconds); }
   if (screen==='discussion' && game?.timer.discussionSeconds>0 && !timerStarted) { timerStarted=true; timer.start(game.timer.discussionSeconds); }
-  if (screen==='setup') { const val=document.querySelector('#imposter-value'); if (val) val.textContent=setupState.imposters; const count=document.querySelector('#player-count'); if(count) count.textContent=setupState.players.length; }
+  if (screen==='setup') { const count=document.querySelector('#player-count'); if(count) count.textContent=setupState.players.length; }
 }
 function handleTimerEnd() {
   timerStarted=false;
@@ -54,14 +53,14 @@ function confirmVote(target) {
 }
 function startNewGame() {
   collectSetup();
-  const errors=engine.validateSetup({players:setupState.players,imposterCount:setupState.imposters,categories:setupState.categories});
+  const errors=engine.validateSetup({players:setupState.players,categories:setupState.categories});
   const error=document.querySelector('#setup-error');
   if(errors.length) { error.textContent=errors.join(' '); error.classList.add('visible'); return; }
   try {
     timer.stop(); game=engine.createGame({...setupState}); revealed=false; voterIndex=0; setScreen('reveal');
   } catch(e) { error.textContent=e.message; error.classList.add('visible'); }
 }
-function replay() { timer.stop(); game=null; setupState.players=setupState.players.map((p,i)=>p || `Player ${i+1}`); setupState.imposters=engine.recommendedImposters(setupState.players.length); setScreen('setup'); }
+function replay() { timer.stop(); game=null; setupState.players=setupState.players.map((p,i)=>p || `Player ${i+1}`); setScreen('setup'); }
 function updatePreference() {
   const sound=document.querySelector('#pref-sound'), motion=document.querySelector('#pref-motion'), clue=document.querySelector('#pref-clue'), discussion=document.querySelector('#pref-discussion');
   if(sound) prefs.sound=sound.checked; if(motion) prefs.reducedMotion=motion.checked; if(clue) prefs.clueSeconds=Number(clue.value); if(discussion) prefs.discussionSeconds=Number(discussion.value);
@@ -71,16 +70,14 @@ function updatePreference() {
 app.addEventListener('click', event => {
   const button=event.target.closest('[data-action]'); if(!button || button.disabled) return;
   const action=button.dataset.action;
-  if(screen==='setup' && ['add-player','remove-player','imposter-minus','imposter-plus','category','toggle-all-categories'].includes(action)) collectSetup();
+  if(screen==='setup' && ['add-player','remove-player','category','toggle-all-categories'].includes(action)) collectSetup();
   switch(action) {
-    case 'setup': setupState.players=['Player 1','Player 2','Player 3']; setupState.imposters=1; setupState.categories=prefs.categories.length?prefs.categories:[...ALL_CATEGORIES]; setScreen('setup'); break;
+    case 'setup': setupState.players=['Player 1','Player 2','Player 3']; setupState.categories=prefs.categories.length?prefs.categories:[...ALL_CATEGORIES]; setupState.clueSeconds=prefs.clueSeconds; setupState.discussionSeconds=prefs.discussionSeconds; setupState.finalGuess=false; setScreen('setup'); break;
     case 'home': game=null; setScreen('home'); break;
     case 'howto': setScreen('howto'); break;
     case 'settings': setScreen('settings'); break;
-    case 'add-player': if(setupState.players.length<20) setupState.players.push(`Player ${setupState.players.length+1}`); setupState.imposters=Math.min(setupState.imposters,setupState.players.length-1); render(); break;
-    case 'remove-player': if(setupState.players.length>3) setupState.players.splice(Number(button.dataset.index),1); setupState.imposters=Math.min(setupState.imposters,setupState.players.length-1); render(); break;
-    case 'imposter-minus': setupState.imposters=Math.max(1,setupState.imposters-1); render(); break;
-    case 'imposter-plus': setupState.imposters=Math.min(setupState.players.length-1,setupState.imposters+1); render(); break;
+    case 'add-player': if(setupState.players.length<20) { const used=new Set(setupState.players.map(name=>name.toLocaleLowerCase())); let next=setupState.players.length+1; while(used.has(`player ${next}`.toLocaleLowerCase())) next++; setupState.players.push(`Player ${next}`); } render(); break;
+    case 'remove-player': if(setupState.players.length>3) setupState.players.splice(Number(button.dataset.index),1); render(); break;
     case 'category': {const key=button.dataset.category; setupState.categories=setupState.categories.includes(key)?setupState.categories.filter(k=>k!==key):[...setupState.categories,key]; render(); break;}
     case 'toggle-all-categories': setupState.categories=setupState.categories.length===ALL_CATEGORIES.length?[]:[...ALL_CATEGORIES]; render(); break;
     case 'start-game': startNewGame(); break;
@@ -115,8 +112,15 @@ app.addEventListener('change', event=>{
   if(event.target.id==='final-guess') setupState.finalGuess=event.target.checked;
 });
 app.addEventListener('input', event=>{
-  if(event.target.matches('.player-name')) { const rows=[...document.querySelectorAll('.player-name')]; const duplicates=rows.filter(input=>input.value.trim()&&rows.filter(other=>other.value.trim().toLowerCase()===input.value.trim().toLowerCase()).length>1); rows.forEach(input=>input.classList.toggle('invalid',duplicates.includes(input))); }
-  if(event.target.id==='custom-words') { const words=event.target.value.split(',').map(x=>x.trim()).filter(Boolean); document.querySelector('#custom-count').textContent=`${words.length} added`; }
+  if(event.target.matches('.player-name')) {
+    const rows=[...document.querySelectorAll('.player-name')];
+    const duplicates=rows.filter(input=>input.value.trim()&&rows.filter(other=>other.value.trim().normalize('NFKC').toLocaleLowerCase()===input.value.trim().normalize('NFKC').toLocaleLowerCase()).length>1);
+    rows.forEach(input=>input.classList.toggle('invalid',duplicates.includes(input)));
+    const errors=engine.validateSetup({players:rows.map(input=>input.value)});
+    const start=document.querySelector('[data-action="start-game"]'), error=document.querySelector('#setup-error');
+    if(start) start.disabled=errors.length>0;
+    if(error) { error.textContent=errors.join(' '); error.classList.toggle('visible',errors.length>0); }
+  }
 });
 window.addEventListener('keydown', e=>{ if(e.key==='Escape'&&screen==='reveal'&&revealed){revealed=false;render();} });
 render();

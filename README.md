@@ -4,7 +4,7 @@ A Bible-themed pass-and-play party game for church youth groups, Bible studies, 
 
 ## Play
 
-Start at `index.html` using a local web server. Add 3–20 unique player names, set the Imposter count, select Bible categories, adjust timers, and optionally enable the final guess. Each game randomly chooses one of two modes:
+Start at `index.html` using a local web server. Add 3–20 unique player names and start; Imposters, the Bible word or pair, and the game mode are selected automatically. The default role policy is 1 Imposter for 3–6 players, 2 for 7–12, and 3 for 13–20. Category preferences, timers, and the final guess are optional settings. Each game randomly chooses one of two modes:
 
 - **Different Word:** Civilians share a Bible-related word; Imposters receive a related word.
 - **Hidden Bible Word:** Civilians share a word; Imposters receive no word and infer it from clues.
@@ -31,7 +31,7 @@ Open `http://localhost:8000`. Serve the project root so JavaScript ES modules lo
 
 ## Word bank
 
-Edit [`js/words.js`](js/words.js). Each category stores related pairs as two strings. `individualWords` is derived from those pairs for Hidden Bible Word mode. The helper functions trim custom values, remove duplicate words and pairs (case-insensitively), reject blank or overlong entries, and exclude pairs whose two words are identical. Custom words entered by a host are paired in the order entered for Different Word mode; an unpaired final word remains available in Hidden Bible Word mode. Use terms that are recognizable and appropriately related. The bank contains biblical names, places, events, objects, concepts, teachings, miracles, books, and people/story combinations.
+Edit [`js/words.js`](js/words.js). The bundled local bank contains curated Bible-related pairs across characters, places, events, objects, books, teachings, concepts, parables, and miracles. `individualWords` is derived from those pairs for Hidden Bible Word mode. An empty or stale category selection automatically uses the full bank. No external request or user-entered word is required, so gameplay works offline. Related pairs are checked for blank, overlong, and duplicate entries before use.
 
 The game uses biblical vocabulary and original instructions, not copied NIV passages or a proprietary NIV word list. It does not provide Bible quotations or unverified verse citations.
 

@@ -15,25 +15,27 @@ export function secureShuffle(items, cryptoObject = globalThis.crypto) {
   for (let i = result.length - 1; i > 0; i--) { const j = randomInt(i + 1, cryptoObject); [result[i], result[j]] = [result[j], result[i]]; }
   return result;
 }
-export function validateSetup({ players, imposterCount, categories = ALL_CATEGORIES }) {
+export function validateSetup({ players } = {}) {
   const errors = [];
   if (!Array.isArray(players) || players.length < MIN_PLAYERS || players.length > MAX_PLAYERS) errors.push(`Add between ${MIN_PLAYERS} and ${MAX_PLAYERS} players.`);
-  const clean = (players ?? []).map(n => String(n).trim());
+  const clean = Array.isArray(players) ? players.map(n => String(n ?? '').trim()) : [];
   if (clean.some(n => !n)) errors.push('Player names cannot be empty.');
-  if (new Set(clean.map(n => n.toLocaleLowerCase())).size !== clean.length) errors.push('Each player needs a unique name.');
-  if (!Number.isInteger(imposterCount) || imposterCount < 1 || imposterCount >= clean.length) errors.push('Keep at least one Civilian and one Imposter.');
-  if (!Array.isArray(categories) || !categories.some(Boolean)) errors.push('Choose at least one Bible category.');
+  if (new Set(clean.map(n => n.normalize('NFKC').toLocaleLowerCase())).size !== clean.length) errors.push('Each player needs a unique name.');
+  // An empty or stale category selection falls back to the bundled Bible word bank.
   return errors;
 }
 export function createGame(config, cryptoObject = globalThis.crypto) {
-  const players = (config.players ?? []).map((name, index) => ({ id: `player-${index + 1}`, name: name.trim(), alive: true, role: 'civilian', word: null, hasVoted: false }));
-  const errors = validateSetup({ ...config, players: players.map(p => p.name) });
+  const names = config?.players;
+  const errors = validateSetup({ ...config, players: names });
   if (errors.length) throw new Error(errors.join(' '));
+  const players = names.map((name, index) => ({ id: `player-${index + 1}`, name: String(name).trim(), alive: true, role: 'civilian', word: null, hasVoted: false }));
+  const imposterCount = recommendedImposters(players.length);
+  if (imposterCount < 1 || imposterCount >= players.length) throw new Error('Could not create a valid role assignment.');
   const mode = config.mode ?? (randomInt(2, cryptoObject) ? 'hidden' : 'different');
-  const selected = config.categories?.length ? config.categories : ALL_CATEGORIES;
-  const shuffled = secureShuffle(players, cryptoObject);
-  const imposters = shuffled.slice(0, config.imposterCount);
-  for (const player of imposters) player.role = 'imposter';
+  const validCategories = Array.isArray(config.categories) ? [...new Set(config.categories.filter(key => ALL_CATEGORIES.includes(key)))] : [];
+  const selected = validCategories.length ? validCategories : ALL_CATEGORIES;
+  const roles = secureShuffle([...Array(imposterCount).fill('imposter'), ...Array(players.length - imposterCount).fill('civilian')], cryptoObject);
+  players.forEach((player, index) => { player.role = roles[index]; });
   let civilianWord, imposterWord = null;
   if (mode === 'different') {
     const pairs = getPairs(selected, config.customWords ?? []);
@@ -45,7 +47,7 @@ export function createGame(config, cryptoObject = globalThis.crypto) {
     civilianWord = words[randomInt(words.length, cryptoObject)];
   } else throw new Error('Unknown game mode.');
   for (const player of players) player.word = player.role === 'imposter' ? imposterWord : civilianWord;
-  return { phase: 'reveal', mode, civilianWord, imposterWord, players, revealOrder: secureShuffle(players.map(p => p.id), cryptoObject), revealIndex: 0, round: 1, votes: {}, revote: false, tiedIds: [], eliminatedId: null, lastEliminatedImposter: false, finalGuessUsed: false, finalGuessResult: null, clueIndex: 0, clueOrder: [], timer: { clueSeconds: config.clueSeconds ?? 30, discussionSeconds: config.discussionSeconds ?? 120 }, settings: { finalGuess: !!config.finalGuess }, categories: selected, winner: null, voteResults: null };
+  return { phase: 'reveal', mode, imposterCount, civilianWord, imposterWord, players, revealOrder: secureShuffle(players.map(p => p.id), cryptoObject), revealIndex: 0, round: 1, votes: {}, revote: false, tiedIds: [], eliminatedId: null, lastEliminatedImposter: false, finalGuessUsed: false, finalGuessResult: null, clueIndex: 0, clueOrder: [], timer: { clueSeconds: config.clueSeconds ?? 30, discussionSeconds: config.discussionSeconds ?? 120 }, settings: { finalGuess: !!config.finalGuess }, categories: selected, winner: null, voteResults: null };
 }
 export function playerById(game, id) { return game.players.find(p => p.id === id); }
 export function livingPlayers(game) { return game.players.filter(p => p.alive); }
