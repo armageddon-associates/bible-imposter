@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as game from '../js/game-engine.js';
 import * as ui from '../js/ui.js';
-import { ALL_CATEGORIES, getPairs, getWords } from '../js/words.js';
+import { ALL_CATEGORIES, getPairs, getWords, individualWords } from '../js/words.js';
 
 function deterministicCrypto() {
   let n = 1;
@@ -141,6 +141,11 @@ test('stores private translations and optional clues without leaking into the wr
   assert.ok(hidden.players.filter(p=>p.role==='imposter').every(p=>p.word===null&&p.wordMalayalam===null&&p.imposterHint));
   assert.ok(hidden.players.filter(p=>p.role==='civilian').every(p=>p.word===hidden.civilianWord&&p.wordMalayalam===hidden.civilianWordEntry.ml));
   const noHint=make({mode:'hidden'}); assert.ok(noHint.players.every(p=>p.role!=='imposter'||p.imposterHint===null));
+});
+test('every built-in secret word has a Malayalam display value', () => {
+  const entries=Object.values(individualWords).flat();
+  assert.ok(entries.length>0);
+  assert.ok(entries.every(entry=>typeof entry.ml==='string'&&entry.ml.trim().length>0));
 });
 test('clue phase goes straight to voting and guards repeated transitions', () => {
   const g=make(); game.startClues(g); game.startVoting(g);
