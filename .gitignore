@@ -1,0 +1,9 @@
+node_modules/
+.vercel/
+.env
+.env.*
+!.env.example
+outputs/
+work/
+Thumbs.db
+Desktop.ini
