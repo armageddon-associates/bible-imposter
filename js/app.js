@@ -9,7 +9,7 @@ const toast = document.querySelector('#toast');
 let prefs = loadPreferences();
 let game = null;
 let screen = 'home';
-let setupState = { players: ['Player 1','Player 2','Player 3'], categories: prefs.categories.length ? prefs.categories : [...ALL_CATEGORIES], clueSeconds: prefs.clueSeconds, discussionSeconds: 600, roundMode: 'elimination', roundLimit: 5, imposterClue: false, finalGuess: false };
+let setupState = { players: ['Player 1','Player 2','Player 3'], categories: prefs.categories.length ? prefs.categories : [...ALL_CATEGORIES], clueSeconds: prefs.clueSeconds, discussionSeconds: 600, roundMode: 'elimination', imposterClue: false, finalGuess: false };
 let revealed = false, voterIndex = 0, pendingVote = [], timerValue = null, timer = createTimer(value => { timerValue = value; render(); }, () => handleTimerEnd()), timerStarted = false, timeoutNotice = '';
 let votePrivate = false;
 
@@ -20,7 +20,6 @@ function collectSetup() {
   setupState.categories = [...document.querySelectorAll('.category-chip.selected')].map(btn=>btn.dataset.category);
   setupState.clueSeconds = Number(document.querySelector('#clue-seconds')?.value ?? setupState.clueSeconds);
   setupState.roundMode = document.querySelector('#round-mode')?.value ?? setupState.roundMode;
-  setupState.roundLimit = Number(document.querySelector('#round-limit')?.value ?? setupState.roundLimit);
   setupState.discussionSeconds = Number(document.querySelector('#discussion-seconds')?.value ?? (setupState.discussionSeconds/60))*60;
   setupState.imposterClue = !!document.querySelector('#imposter-clue')?.checked;
   setupState.finalGuess = !!document.querySelector('#final-guess')?.checked;
@@ -56,14 +55,14 @@ function confirmVote(target) {
 }
 function startNewGame() {
   collectSetup();
-  const errors=engine.validateSetup({players:setupState.players,categories:setupState.categories,roundMode:setupState.roundMode,roundLimit:setupState.roundLimit,discussionSeconds:setupState.discussionSeconds});
+  const errors=engine.validateSetup({players:setupState.players,categories:setupState.categories,roundMode:setupState.roundMode,discussionSeconds:setupState.discussionSeconds});
   const error=document.querySelector('#setup-error');
   if(errors.length) { error.textContent=errors.join(' '); error.classList.add('visible'); return; }
   try {
     timer.stop(); timeoutNotice=''; game=engine.createGame({...setupState}); revealed=false; voterIndex=0; setScreen('reveal');
   } catch(e) { error.textContent=e.message; error.classList.add('visible'); }
 }
-function replay() { timer.stop(); game=null; setupState.players=setupState.players.map((p,i)=>p || `Player ${i+1}`); setScreen('setup'); }
+function replay() { timer.stop(); timeoutNotice=''; game=engine.createGame({...setupState}); revealed=false; voterIndex=0; setScreen('reveal'); }
 function updatePreference() {
   const sound=document.querySelector('#pref-sound'), motion=document.querySelector('#pref-motion'), clue=document.querySelector('#pref-clue');
   if(sound) prefs.sound=sound.checked; if(motion) prefs.reducedMotion=motion.checked; if(clue) prefs.clueSeconds=Number(clue.value);
@@ -75,7 +74,7 @@ app.addEventListener('click', event => {
   const action=button.dataset.action;
   if(screen==='setup' && ['add-player','remove-player','category','toggle-all-categories'].includes(action)) collectSetup();
   switch(action) {
-    case 'setup': setupState.players=['Player 1','Player 2','Player 3']; setupState.categories=prefs.categories.length?prefs.categories:[...ALL_CATEGORIES]; setupState.clueSeconds=prefs.clueSeconds; setupState.discussionSeconds=600; setupState.roundMode='elimination'; setupState.roundLimit=5; setupState.imposterClue=false; setupState.finalGuess=false; setScreen('setup'); break;
+    case 'setup': setupState.players=['Player 1','Player 2','Player 3']; setupState.categories=prefs.categories.length?prefs.categories:[...ALL_CATEGORIES]; setupState.clueSeconds=prefs.clueSeconds; setupState.discussionSeconds=600; setupState.roundMode='elimination'; setupState.imposterClue=false; setupState.finalGuess=false; setScreen('setup'); break;
     case 'home': game=null; setScreen('home'); break;
     case 'howto': setScreen('howto'); break;
     case 'settings': setScreen('settings'); break;
@@ -95,7 +94,7 @@ app.addEventListener('click', event => {
     case 'confirm-vote': confirmVote(pendingVote); votePrivate=false; break;
     case 'next-voter': voterIndex++; votePrivate=false; if(voterIndex>=engine.eligibleVoters(game).length) finishVoting(); else render(); break;
     case 'end-voting': finishVoting(); break;
-    case 'next-round': try { engine.nextRound(game); voterIndex=0; timeoutNotice=''; setScreen(game.roundMode==='fixed'?'reveal':'clues'); } catch(e) { showToast(e.message); } break;
+    case 'next-round': try { engine.nextRound(game); voterIndex=0; timeoutNotice=''; setScreen('clues'); } catch(e) { showToast(e.message); } break;
     case 'play-again': replay(); break;
     case 'skip-guess': try { engine.skipFinalGuess(game); goResults(); } catch(e) { showToast(e.message); } break;
     case 'clear-preferences': clearPreferences(); prefs=loadPreferences(); showToast('Saved preferences cleared.'); render(); break;
@@ -109,8 +108,7 @@ app.addEventListener('change', event=>{
   if(event.target.id==='clue-seconds') setupState.clueSeconds=Number(event.target.value);
   if(event.target.id==='final-guess') setupState.finalGuess=event.target.checked;
   if(event.target.id==='imposter-clue') setupState.imposterClue=event.target.checked;
-  if(event.target.id==='round-mode') { setupState.roundMode=event.target.value; const setting=document.querySelector('#round-limit-setting'); if(setting) setting.hidden=setupState.roundMode!=='fixed'; updateSetupValidation(); }
-  if(event.target.id==='round-limit') { setupState.roundLimit=Number(event.target.value); updateSetupValidation(); }
+  if(event.target.id==='round-mode') { setupState.roundMode=event.target.value; updateSetupValidation(); }
   if(event.target.id==='discussion-seconds') {setupState.discussionSeconds=Number(event.target.value)*60; updateSetupValidation();}
 });
 app.addEventListener('input', event=>{
@@ -118,12 +116,12 @@ app.addEventListener('input', event=>{
     const rows=[...document.querySelectorAll('.player-name')];
     const duplicates=rows.filter(input=>input.value.trim()&&rows.filter(other=>other.value.trim().normalize('NFKC').toLocaleLowerCase()===input.value.trim().normalize('NFKC').toLocaleLowerCase()).length>1);
     rows.forEach(input=>input.classList.toggle('invalid',duplicates.includes(input)));
-    const errors=engine.validateSetup({players:rows.map(input=>input.value),roundMode:setupState.roundMode,roundLimit:Number(document.querySelector('#round-limit')?.value ?? setupState.roundLimit),discussionSeconds:Number(document.querySelector('#discussion-seconds')?.value ?? (setupState.discussionSeconds/60))*60});
+    const errors=engine.validateSetup({players:rows.map(input=>input.value),roundMode:setupState.roundMode,discussionSeconds:Number(document.querySelector('#discussion-seconds')?.value ?? (setupState.discussionSeconds/60))*60});
     const start=document.querySelector('[data-action="start-game"]'), error=document.querySelector('#setup-error');
     if(start) start.disabled=errors.length>0;
     if(error) { error.textContent=errors.join(' '); error.classList.toggle('visible',errors.length>0); }
   }
 });
-function updateSetupValidation() { const errors=engine.validateSetup({players:[...document.querySelectorAll('.player-name')].map(input=>input.value),roundMode:setupState.roundMode,roundLimit:Number(document.querySelector('#round-limit')?.value ?? setupState.roundLimit),discussionSeconds:Number(document.querySelector('#discussion-seconds')?.value ?? (setupState.discussionSeconds/60))*60}); const start=document.querySelector('[data-action="start-game"]'),error=document.querySelector('#setup-error'); if(start) start.disabled=errors.length>0; if(error) { error.textContent=errors.join(' '); error.classList.toggle('visible',errors.length>0); } }
+function updateSetupValidation() { const errors=engine.validateSetup({players:[...document.querySelectorAll('.player-name')].map(input=>input.value),roundMode:setupState.roundMode,discussionSeconds:Number(document.querySelector('#discussion-seconds')?.value ?? (setupState.discussionSeconds/60))*60}); const start=document.querySelector('[data-action="start-game"]'),error=document.querySelector('#setup-error'); if(start) start.disabled=errors.length>0; if(error) { error.textContent=errors.join(' '); error.classList.toggle('visible',errors.length>0); } }
 window.addEventListener('keydown', e=>{ if(e.key==='Escape'&&screen==='reveal'&&revealed){revealed=false;render();} });
 render();
